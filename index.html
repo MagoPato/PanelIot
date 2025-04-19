@@ -1,0 +1,421 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Panel de Monitoreo IoT</title>
+    <!-- Bootstrap 5 -->
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0-alpha1/dist/css/bootstrap.min.css" rel="stylesheet">
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0-beta3/css/all.min.css" rel="stylesheet">
+    <style>
+        body {
+            background-color: #121212;
+            color: #E1E1E1;
+        }
+        .text-gold {
+            color: #FFD700 !important;
+        }
+        .bg-dark-panel {
+            background-color: #1E1E1E;
+        }
+        .cache-badge {
+            font-size: 0.7rem;
+            padding: 2px 5px;
+            border-radius: 4px;
+            margin-left: 5px;
+            background-color: #6c757d;
+        }
+    </style>
+</head>
+<body>
+    <div class="container mt-4">
+        <h1 class="text-center text-gold mb-4">Panel de Monitoreo IoT</h1>
+        <div class="row g-4">
+            <!-- Gráfico de Temperatura -->
+            <div class="col-md-8">
+                <div class="card bg-dark-panel shadow border-0 rounded-4 h-100">
+                    <div class="card-body">
+                        <h3 class="card-title text-gold text-center mb-4">Monitor de Temperatura</h3>
+                        <div class="chart-container">
+                            <canvas id="temperatureChart"></canvas>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Panel de Estado -->
+            <div class="col-md-4">
+                <div class="card bg-dark-panel shadow border-0 rounded-4 h-100">
+                    <div class="card-body">
+                        <h3 class="card-title text-gold text-center mb-4">Estado del Dispositivo</h3>
+                        
+                        <div class="d-flex justify-content-between align-items-center mb-3">
+                            <div class="d-flex align-items-center">
+                                <i class="fas fa-plug text-gold fs-4 me-3"></i>
+                                <span id="deviceStatus">Conectando...</span>
+                            </div>
+                        </div>
+                        
+                        <div class="d-flex justify-content-between align-items-center mb-3">
+                            <div class="d-flex align-items-center">
+                                <i class="fas fa-battery-full text-gold fs-4 me-3"></i>
+                                <span id="batteryStatus">Cargando...</span>
+                            </div>
+                        </div>
+                        
+                        <div class="d-flex justify-content-between align-items-center mb-3">
+                            <div class="d-flex align-items-center">
+                                <i class="fas fa-bolt text-gold fs-4 me-3"></i>
+                                <span id="voltageStatus">Midiendo voltaje...</span>
+                            </div>
+                        </div>
+                        
+                        <div class="d-flex justify-content-between align-items-center mb-3">
+                            <div class="d-flex align-items-center">
+                                <i class="fas fa-clock text-gold fs-4 me-3"></i>
+                                <span id="uptimeStatus">Calculando uptime...</span>
+                            </div>
+                        </div>
+                        
+                        <div class="d-flex justify-content-between align-items-center mb-3">
+                            <div class="d-flex align-items-center">
+                                <i class="fas fa-lightbulb text-gold fs-4 me-3"></i>
+                            </div>
+                            <button id="toggleLED" class="btn btn-success rounded-pill px-4">LED OFF</button>
+                        </div>
+                        
+                        <div class="d-flex justify-content-center mt-4">
+                            <button id="refreshData" class="btn btn-success rounded-pill px-4 w-100">
+                                <i class="fas fa-sync-alt me-2"></i>Refrescar Datos
+                            </button>
+                        </div>
+                        
+                        <div class="mt-3 text-center small text-secondary">
+                            <span id="lastUpdated"></span>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Bootstrap JS y dependencias -->
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0-alpha1/dist/js/bootstrap.bundle.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    
+    <script>
+        const deviceID = '0a10aced202194944a0561fc';
+        const apiToken = '56c8267b17f7c1872d3133b970b208d43db13b77';
+        const baseUrl = `https://api.particle.io/v1/devices/${deviceID}`;
+        
+        // Clave para almacenar los datos en localStorage
+        const CACHE_KEY = 'iot_dashboard_data';
+
+        // Objeto para almacenar los datos recientes
+        let deviceData = {
+            temp: { value: null, timestamp: null },
+            voltage: { value: null, timestamp: null },
+            uptime: { value: null, timestamp: null },
+            tempHistory: [], // Para el gráfico
+            lastUpdated: null
+        };
+
+        // Cargar datos del caché al iniciar
+        function loadCachedData() {
+            const cachedData = localStorage.getItem(CACHE_KEY);
+            if (cachedData) {
+                try {
+                    const parsedData = JSON.parse(cachedData);
+                    deviceData = parsedData;
+                    console.log('Datos cargados desde caché:', deviceData);
+                    updateUI(true);
+                    return true;
+                } catch (e) {
+                    console.error('Error al cargar datos del caché:', e);
+                }
+            }
+            return false;
+        }
+
+        // Guardar datos en caché
+        function saveCacheData() {
+            try {
+                localStorage.setItem(CACHE_KEY, JSON.stringify(deviceData));
+                console.log('Datos guardados en caché');
+            } catch (e) {
+                console.error('Error al guardar datos en caché:', e);
+            }
+        }
+
+        async function fetchVariable(variableName) {
+            try {
+                const response = await fetch(`${baseUrl}/${variableName}`, {
+                    headers: {
+                        'Authorization': `Bearer ${apiToken}`
+                    }
+                });
+                const data = await response.json();
+                if (data && data.result !== undefined) {
+                    return data.result;
+                }
+                return null;
+            } catch (error) {
+                console.error(`Error al obtener ${variableName}:`, error);
+                return null;
+            }
+        }
+
+        // Función corregida para formatear uptime (recibe minutos, no segundos)
+        const formatUptime = (minutes) => {
+            const days = Math.floor(minutes / (24 * 60));
+            minutes %= (24 * 60);
+            const hours = Math.floor(minutes / 60);
+            const mins = Math.floor(minutes % 60);
+            
+            let result = '';
+            if (days > 0) result += `${days}d `;
+            if (hours > 0 || days > 0) result += `${hours}h `;
+            result += `${mins}m`;
+            
+            return result;
+        };
+
+        // Formatear fecha para mostrar cuándo se actualizó por última vez
+        function formatLastUpdated(timestamp) {
+            if (!timestamp) return 'Nunca actualizado';
+            
+            const date = new Date(timestamp);
+            return `Última actualización: ${date.toLocaleDateString()} ${date.toLocaleTimeString()}`;
+        }
+
+        const ctx = document.getElementById('temperatureChart').getContext('2d');
+        const temperatureChart = new Chart(ctx, {
+            type: 'line',
+            data: {
+                labels: [],
+                datasets: [{
+                    label: 'Temperatura (°C)',
+                    data: [],
+                    borderColor: '#FF6347',
+                    fill: true,
+                    backgroundColor: 'rgba(255, 99, 71, 0.3)',
+                    tension: 0.4
+                }]
+            },
+            options: {
+                responsive: true,
+                maintainAspectRatio: false,
+                plugins: {
+                    legend: {
+                        labels: {
+                            color: '#E1E1E1'
+                        }
+                    }
+                },
+                scales: {
+                    x: {
+                        grid: {
+                            color: 'rgba(255, 255, 255, 0.1)'
+                        },
+                        ticks: {
+                            color: '#E1E1E1'
+                        }
+                    },
+                    y: {
+                        beginAtZero: true,
+                        grid: {
+                            color: 'rgba(255, 255, 255, 0.1)'
+                        },
+                        ticks: {
+                            color: '#E1E1E1'
+                        }
+                    }
+                }
+            }
+        });
+
+        // Actualizar la interfaz de usuario con los datos actuales
+        function updateUI(fromCache = false) {
+            // Actualizar el indicador de la última actualización
+            document.getElementById('lastUpdated').textContent = formatLastUpdated(deviceData.lastUpdated);
+            
+            const cacheLabel = fromCache ? '<span class="cache-badge">CACHÉ</span>' : '';
+            
+            // Actualizar temperatura y gráfico
+            if (deviceData.temp.value !== null) {
+                // Actualizar gráfico con datos históricos
+                temperatureChart.data.labels = deviceData.tempHistory.map(item => item.time);
+                temperatureChart.data.datasets[0].data = deviceData.tempHistory.map(item => item.value);
+                temperatureChart.update();
+
+                document.getElementById('deviceStatus').innerHTML = `Conectado ${cacheLabel}`;
+                document.getElementById('deviceStatus').className = fromCache ? 'text-warning' : 'text-success';
+            } else {
+                document.getElementById('deviceStatus').textContent = 'No hay datos disponibles';
+                document.getElementById('deviceStatus').className = 'text-danger';
+            }
+            
+            // Actualizar voltaje de batería
+            if (deviceData.voltage.value !== null) {
+                const voltage = parseFloat(deviceData.voltage.value);
+                const batteryPercentage = calculateBatteryPercentage(voltage);
+                document.getElementById('batteryStatus').innerHTML = `Batería: ${batteryPercentage}% ${cacheLabel}`;
+                document.getElementById('batteryStatus').className = getBatteryStatusClass(batteryPercentage);
+                
+                document.getElementById('voltageStatus').innerHTML = `Voltaje: ${voltage.toFixed(2)}V ${cacheLabel}`;
+                document.getElementById('voltageStatus').className = getVoltageStatusClass(voltage);
+            } else {
+                document.getElementById('voltageStatus').textContent = 'Voltaje: No disponible';
+                document.getElementById('voltageStatus').className = 'text-warning';
+            }
+            
+            // Actualizar uptime
+            if (deviceData.uptime.value !== null) {
+                document.getElementById('uptimeStatus').innerHTML = `Tiempo activo: ${formatUptime(parseFloat(deviceData.uptime.value))} ${cacheLabel}`;
+                document.getElementById('uptimeStatus').className = 'text-info';
+            } else {
+                document.getElementById('uptimeStatus').textContent = 'Tiempo activo: No disponible';
+                document.getElementById('uptimeStatus').className = 'text-warning';
+            }
+        }
+
+        async function updateDashboard() {
+            try {
+                // Fetch all data in parallel
+                const [temp, voltage, uptime] = await Promise.all([
+                    fetchVariable('temp'),
+                    fetchBatteryVoltage(),
+                    fetchUptime()
+                ]);
+                
+                const now = new Date();
+                const timeString = now.getHours() + ':' + 
+                                  (now.getMinutes() < 10 ? '0' : '') + now.getMinutes() + ':' + 
+                                  (now.getSeconds() < 10 ? '0' : '') + now.getSeconds();
+                
+                // Actualizar datos sólo si son válidos
+                let isUpdated = false;
+                
+                if (temp !== null) {
+                    deviceData.temp = { value: parseFloat(temp), timestamp: now.getTime() };
+                    
+                    // Añadir nuevo punto al historial de temperatura
+                    deviceData.tempHistory.push({
+                        time: timeString,
+                        value: parseFloat(temp)
+                    });
+                    
+                    // Limitar el historial a los últimos 10 puntos
+                    if (deviceData.tempHistory.length > 10) {
+                        deviceData.tempHistory.shift();
+                    }
+                    
+                    isUpdated = true;
+                }
+                
+                if (voltage !== null) {
+                    deviceData.voltage = { value: parseFloat(voltage), timestamp: now.getTime() };
+                    isUpdated = true;
+                }
+                
+                if (uptime !== null) {
+                    deviceData.uptime = { value: parseFloat(uptime), timestamp: now.getTime() };
+                    isUpdated = true;
+                }
+                
+                if (isUpdated) {
+                    deviceData.lastUpdated = now.getTime();
+                    saveCacheData();  // Guardar en caché
+                    updateUI(false);  // Actualizar UI con datos frescos
+                    return true;
+                }
+                
+                return false;
+            } catch (error) {
+                console.error('Error al actualizar el dashboard:', error);
+                return false;
+            }
+        }
+
+        // Calculate battery percentage based on voltage (adjust these values for your battery)
+        function calculateBatteryPercentage(voltage) {
+            // Example calculation for a LiPo battery (adjust for your specific battery)
+            const maxVoltage = 4.2;   // Fully charged voltage
+            const minVoltage = 3.2;   // Minimum safe voltage
+            
+            if (voltage >= maxVoltage) return 100;
+            if (voltage <= minVoltage) return 0;
+            
+            const percentage = ((voltage - minVoltage) / (maxVoltage - minVoltage)) * 100;
+            return Math.round(percentage);
+        }
+
+        function getBatteryStatusClass(percentage) {
+            if (percentage > 60) return 'text-success';
+            if (percentage > 20) return 'text-warning';
+            return 'text-danger';
+        }
+
+        function getVoltageStatusClass(voltage) {
+            if (voltage > 3.7) return 'text-success';
+            if (voltage > 3.3) return 'text-warning';
+            return 'text-danger';
+        }
+
+        async function fetchBatteryVoltage() {
+            return await fetchVariable('batteryVoltage');
+        }
+
+        async function fetchUptime() {
+            return await fetchVariable('uptime');
+        }
+
+        document.getElementById('toggleLED').addEventListener('click', async () => {
+            const button = document.getElementById('toggleLED');
+            const ledState = button.textContent === 'LED OFF' ? 'on' : 'off';
+            
+            try {
+                await fetch(`${baseUrl}/controlLED`, {
+                    method: 'POST',
+                    headers: {
+                        'Authorization': `Bearer ${apiToken}`,
+                        'Content-Type': 'application/x-www-form-urlencoded'
+                    },
+                    body: `args=${ledState}`
+                });
+                
+                button.textContent = ledState === 'on' ? 'LED ON' : 'LED OFF';
+                button.className = ledState === 'on' ? 
+                    'btn btn-warning rounded-pill px-4' : 
+                    'btn btn-success rounded-pill px-4';
+            } catch (error) {
+                console.error('Error al controlar el LED:', error);
+            }
+        });
+
+        document.getElementById('refreshData').addEventListener('click', () => {
+            document.getElementById('refreshData').disabled = true;
+            document.getElementById('refreshData').innerHTML = '<span class="spinner-border spinner-border-sm me-2"></span>Actualizando...';
+            
+            updateDashboard().finally(() => {
+                setTimeout(() => {
+                    document.getElementById('refreshData').disabled = false;
+                    document.getElementById('refreshData').innerHTML = '<i class="fas fa-sync-alt me-2"></i>Refrescar Datos';
+                }, 1000);
+            });
+        });
+
+        // Establecer altura fija para el gráfico
+        document.querySelector('.chart-container').style.height = '300px';
+
+        // Inicializar: Cargar datos de caché primero
+        loadCachedData();
+        
+        // Luego intentar actualizar con datos frescos
+        updateDashboard();
+        
+        // Configurar actualización periódica
+        setInterval(updateDashboard, 10000);  // Cada 10 segundos
+    </script>
+</body>
+</html>
